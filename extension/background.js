@@ -12,7 +12,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       },
       body: JSON.stringify(data),
     })
-      .then((response) => response.json())
+      .then((response) => response.text())
       .then((data) => console.log("Data sent to server:", data))
       .catch((error) => console.error("Error sending data to server:", error));
   }
