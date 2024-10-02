@@ -1,41 +1,70 @@
-import { CloudWatchLogsClient } from "@aws-sdk/client-cloudwatch-logs";
+import {
+  CloudWatchLogsClient,
+  CreateLogStreamCommand,
+  DescribeLogStreamsCommand,
+  PutLogEventsCommand,
+} from "@aws-sdk/client-cloudwatch-logs";
 import { Request, Response } from "express";
-import NodeCache from "node-cache";
 
 const cloudWatchClient = new CloudWatchLogsClient({
   region: process.env.AWS_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
 });
 
-const sequenceTokenCache = new NodeCache({ stdTTL: 3600 });
-const logEventQueue = new Map();
-
 export async function handleTraffic(req: Request, res: Response) {
+  const { customerId: logGroupName, dataSourceId: logStreamName } = req.params;
+
+  const logEvent = {
+    timestamp: new Date().getTime(),
+    message: JSON.stringify({
+      eventType: "apiRequest",
+      ...req.body,
+    }),
+  };
+
   try {
-    const { customerId: logGroupName, dataSourceId: logStreamName } =
-      req.params;
+    await ensureLogStreamExists(logGroupName, logStreamName);
+    const sequenceToken = await getSequenceToken(logGroupName, logStreamName);
 
-    const key = `${logGroupName}:${logStreamName}`;
-    const logEvent = {
-      timestamp: new Date().getTime(),
-      message: {
-        eventType: "apiRequest",
-        ...req.body,
-      },
+    const inputs = {
+      logGroupName,
+      logStreamName,
+      logEvents: [logEvent],
+      sequenceToken,
     };
+    const command = new PutLogEventsCommand(inputs);
+    await cloudWatchClient.send(command);
 
-    if (!logEventQueue.has(key)) {
-      logEventQueue.set(key, []);
-    }
-    logEventQueue.get(key).push(logEvent);
-
-    console.log(logEventQueue);
-
-    res.status(200).send("Traffic log received and queued for processing");
+    res.status(200).send("Traffic log received");
   } catch (error) {
     res.status(500).send("Internal Server Error");
   }
+}
+
+async function ensureLogStreamExists(
+  logGroupName: string,
+  logStreamName: string
+) {
+  try {
+    const createStreamCommand = new CreateLogStreamCommand({
+      logGroupName,
+      logStreamName,
+    });
+    await cloudWatchClient.send(createStreamCommand);
+  } catch (error) {
+    if ((error as Error).name !== "ResourceAlreadyExistsException") {
+      throw error;
+    }
+  }
+}
+
+async function getSequenceToken(logGroupName: string, logStreamName: string) {
+  const describeStreamsCommand = new DescribeLogStreamsCommand({
+    logGroupName,
+    logStreamNamePrefix: logStreamName,
+  });
+  const response = await cloudWatchClient.send(describeStreamsCommand);
+  const logStream = response?.logStreams?.find(
+    (stream) => stream.logStreamName === logStreamName
+  );
+  return logStream?.uploadSequenceToken;
 }
