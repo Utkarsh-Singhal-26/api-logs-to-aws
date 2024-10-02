@@ -16,7 +16,7 @@
     "content_scripts": [
         {
             "matches": [
-                "<all_urls>"
+                "https://jsonplaceholder.typicode.com/*"
             ],
             "js": [
                 "content.js"
